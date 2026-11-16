@@ -1,74 +1,86 @@
-import json  # for loading JSON files
-import json_db  # for connecting to the PostgreSQL database
-from pathlib import Path  # for handling file paths in a cross-platform way
+# loader.py: Reads the JSON files, validates their structure, parses student birthdays and loads the data into the database.
+
+import json  # For reading and parsing JSON files.
+from datetime import datetime  # For parsing date strings.
+from pathlib import Path  # For data annotation.
+from typing import Any  # For data annotation.
+
+from psycopg2.extensions import connection as Connection  # For data annotation.
+from psycopg2.extras import execute_values  # For efficiently inserting multiple rows into the database
 
 
-
-class Loader:
-    def __init__(self, file_name):
-        self.file_name = file_name
-
-    # open and read the JSON file safely.
-    def load_file(self):
+# Validates JSON data and loads rooms and students into PostgreSQL.
+class DataLoader:
+    # Reads a JSON array and checks that every record has the required fields.
+    @staticmethod
+    def _read_records(
+        file_path: Path, required_fields: set[str]
+    ) -> list[dict[str, Any]]:
         try:
-            with open(self.file_name, "r", encoding="utf-8") as file:
-                return json.load(file)
-        except FileNotFoundError:
-            print("Error: File is not found")
-        except json.JSONDecodeError:
-            print("Error: Invalid JSON format in the file.")
-        except Exception as e:  # in case of any exception
-            print(f"Unexpected error: {e}")
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise ValueError(f"Invalid JSON in {file_path}: {error}") from error
 
-        return None
+        if not isinstance(data, list):
+            raise ValueError(f"{file_path} must contain a JSON array")
 
-
-
-# execute the following code only if this script is run directly, not when imported as a module
-if __name__ == "__main__":  
-    # Base directory where json_db.py lives
-    BASE_DIR = Path(__file__).resolve().parent / "files for loading"
-    # Resolves accurately regardless of where terminal was opened
-    path_rooms = BASE_DIR / "rooms.json"
-    path_students = BASE_DIR / "students.json"
-
-    # load json files using the Loader class
-    rooms = Loader(path_rooms)
-    rooms_data = rooms.load_file()
-
-    students = Loader(path_students)
-    students_data = students.load_file()
-
-    # create an instance of the json_db class to establish a connection to the PostgreSQL database
-    database = json_db.Json_db()
-    try:
-        with database.connection.cursor() as cursor:
-            # create a template for the insert query to load data into the target table
-            # the %s placeholders rely on psycopg2’s parameter binding to handle SQL injection and data type conversion
-            insert_query_rooms = "INSERT INTO rooms (id, name) VALUES (%s, %s);"
-            for room in rooms_data:
-                cursor.execute(insert_query_rooms, (room["id"], room["name"]))
-
-            insert_query_students = (
-                "INSERT INTO students (id, name, birthday, room, sex) "
-                "VALUES (%s, %s, %s, %s, %s);"
-            )
-            for student in students_data:
-                cursor.execute(
-                    insert_query_students,
-                    (
-                        student["id"],
-                        student["name"],
-                        student["birthday"],
-                        student["room"],
-                        student["sex"],
-                    ),
+        for index, record in enumerate(data):
+            if not isinstance(record, dict):
+                raise ValueError(f"Record {index} in {file_path} must be a JSON object")
+            missing = required_fields - record.keys()
+            if missing:
+                raise ValueError(
+                    f"Record {index} in {file_path} is missing: {', '.join(sorted(missing))}"
                 )
 
-        database.connection.commit()
-    except Exception as e:  # in case of any exception
-        print(f"Unexpected error: {e}")
-    finally:  # close the database connection in the finally block to ensure it is closed even if an error occurs
-        database.close()
+        return data
 
+    # Validates input files, converts birthdays, and inserts both datasets.
+    def load(
+        self, connection: Connection, rooms_path: Path, students_path: Path
+    ) -> None:
+        rooms = self._read_records(rooms_path, {"id", "name"})
+        students = self._read_records(
+            students_path, {"id", "name", "birthday", "room", "sex"}
+        )
 
+        student_rows = []
+        for index, student in enumerate(students):
+            birthday = student["birthday"]
+            if not isinstance(birthday, str):
+                raise ValueError(f"Student record {index} has a non-string birthday")
+            try:
+                parsed_birthday = datetime.fromisoformat(birthday)
+            except ValueError as error:
+                raise ValueError(
+                    f"Student record {index} has an invalid ISO birthday: {birthday!r}"
+                ) from error
+
+            student_rows.append(
+                (
+                    student["id"],
+                    student["name"],
+                    parsed_birthday,
+                    student["room"],
+                    student["sex"],
+                )
+            )
+
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute("TRUNCATE TABLE students, rooms")
+                execute_values(
+                    cursor,
+                    "INSERT INTO rooms (id, name) VALUES %s",
+                    [(room["id"], room["name"]) for room in rooms],
+                    page_size=1000,
+                )
+                execute_values(
+                    cursor,
+                    """
+                    INSERT INTO students (id, name, birthday, room, sex)
+                    VALUES %s
+                    """,
+                    student_rows,
+                    page_size=1000,
+                )

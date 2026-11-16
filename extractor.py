@@ -1,52 +1,75 @@
-import json
-import json_db  # for connecting to the PostgreSQL database
-from pathlib import Path  # for handling file paths
+# - extractor.py: Runs SQL queries on the PostgreSQL server and exports the results as JSON or XML.
+
+import json  # Provides functions for converting results to JSON text.
+import xml.etree.ElementTree as ET  # Provides functions for converting results to XML documents.
+from datetime import date, datetime, time, timedelta  # Provides date and time types for checking query results.
+from decimal import Decimal  # Imports the type used for checking query results.
+from pathlib import Path  # Provides the filesystem path type used in annotations.
+from typing import Any  # Provides a flexible type used in annotations.
+
+from psycopg2.extensions import connection as Connection  # For data annotation.
+from psycopg2.extras import RealDictCursor  # Makes query rows behave like dictionaries for easy access.
 
 
-class Extractor:
-    def __init__(self, query_file):
-        self.query_file = query_file
+# Runs report queries from a directory and returns their results.
+class SQLQueryRunner:
+    # Stores the directory containing the SQL report files.
+    def __init__(self, query_directory: Path) -> None:
+        self.query_directory = query_directory
+
+    # Executes every SQL file and maps each filename to its result rows.
+    def execute_all(
+        self, connection: Connection
+    ) -> dict[str, list[dict[str, Any]]]:
+        query_files = sorted(self.query_directory.glob("*.sql"))
+        if not query_files:
+            raise FileNotFoundError(f"No SQL queries found in {self.query_directory}")
+
+        results = {}
+        for query_file in query_files:
+            query = query_file.read_text(encoding="utf-8")
+            with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(query)
+                results[query_file.stem] = [dict(row) for row in cursor.fetchall()]
+        return results
 
 
-    def read_sql_query(self, cursor):
-        with self.query_file.open("r", encoding="utf-8") as file:  # opens the SQL file in read mode
-            query = file.read()  # reads the entire content of the SQL file into a string variable
-        cursor.execute(query)  # Sends the SQL query string over the active database connection to the PostgreSQL server for execution
-        columns = [column[0] for column in cursor.description]  # column[0] accesses the first item of each descriptor, which is the column name as a string
-        return [
-            dict(zip(columns, row))  # pairs each column header with its corresponding cell value
-            for row in cursor.fetchall()  # cursor.fetchall() retrieves all remaining rows of the query result as a list of tuples
-        ]  # list comprehension wraps all these row dictionaries into a single list
+# Writes query results to a JSON or XML report file.
+class ReportExporter:
+    # Converts the results in the requested format and writes them to disk.
+    def export(
+        self, results: dict[str, list[dict[str, Any]]], output_path: Path, output_format: str
+    ) -> None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if output_format == "json":
+            content = json.dumps(
+                results, indent=2, ensure_ascii=False, default=self._serialize
+            ) + "\n"
+        elif output_format == "xml":
+            content = self._to_xml(results)
+        else:
+            raise ValueError(f"Unsupported output format: {output_format}")
+        output_path.write_text(content, encoding="utf-8")
 
+    # Converts database value types that JSON cannot convert by default.
+    @staticmethod
+    def _serialize(value: Any) -> str | float:
+        if isinstance(value, Decimal):
+            return float(value)
+        if isinstance(value, (date, datetime, time, timedelta)):
+            return str(value)
+        raise TypeError(f"Cannot convert {type(value).__name__} to JSON")
 
-# execute the following code only if this script is run directly, not when imported as a module
-if __name__ == "__main__":
-    # Base directory where extractor.py lives
-    BASE_DIR = Path(__file__).resolve().parent / "sql queries"
-    # Resolves accurately regardless of where terminal was opened
-    query_1 = BASE_DIR / "List of rooms and the number of students in each of them.sql"
-    query_2 = BASE_DIR / "5 rooms with the smallest average age of students.sql"
-    query_3 = BASE_DIR / "5 rooms with the largest difference in the age of students.sql"
-    query_4 = BASE_DIR / "List of rooms where different-sex students live.sql"
-
-    database = json_db.Json_db()
-    try:
-        with database.connection.cursor() as cursor:
-            # creates a connection to the PostgreSQL database and executes the queries defined in the SQL files
-            results = {
-                "List of rooms and the number of students in each of them.sql": Extractor(query_1).read_sql_query(cursor),
-                "5 rooms with the smallest average age of students.sql": Extractor(query_2).read_sql_query(cursor),
-                "5 rooms with the largest difference in the age of students.sql": Extractor(query_3).read_sql_query(cursor),
-                "List of rooms where different-sex students live.sql": Extractor(query_4).read_sql_query(cursor),
-            }
-
-        # write the results to a JSON file in the same directory as extractor.py
-        analytical_file = Path(__file__).resolve().parent / "query_results.json"
-        analytical_file.write_text( 
-            json.dumps(results, indent=4, default=str),
-            encoding="utf-8",
-        )
-    except Exception as e:  # in case of any exception
-        print(f"Unexpected error: {e}")
-    finally:
-        database.close()  # close the database connection
+    # Builds an XML document from the report names, rows, and fields.
+    @staticmethod
+    def _to_xml(results: dict[str, list[dict[str, Any]]]) -> str:
+        root = ET.Element("reports")
+        for report_name, rows in results.items():
+            report = ET.SubElement(root, "report", name=report_name)
+            for row in rows:
+                row_element = ET.SubElement(report, "row")
+                for field, value in row.items():
+                    element = ET.SubElement(row_element, field)
+                    element.text = "" if value is None else str(value)
+        ET.indent(root, space="  ")
+        return ET.tostring(root, encoding="unicode", xml_declaration=True) + "\n"

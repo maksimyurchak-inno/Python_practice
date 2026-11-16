@@ -1,0 +1,4 @@
+# - requirements.txt: Lists the Python dependencies required by the project. This file is used by pip to install the necessary packages in the virtual environment.
+
+psycopg2-binary>=2.9.9
+python-dotenv>=1.0.1
