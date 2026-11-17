@@ -23,11 +23,11 @@ Create a `.env` file in the project root and set your PostgreSQL connection
 values there. The `.env` file is ignored by Git and must not be committed.
 
 ```text
-PGDATABASE=<postgres>
-PGUSER=<admin>
-PGPASSWORD=<your-postgresql-password>
-PGHOST=<localhost>
-PGPORT=<5432>
+PGDATABASE=postgres
+PGUSER=admin
+PGPASSWORD=your-postgresql-password
+PGHOST=localhost
+PGPORT=5432
 ```
 
 The database must already exist.
@@ -39,7 +39,7 @@ The database must already exist.
 
 - `(room, birthday)` starts with the join key and includes the date used by
   the age reports.
-- `(room, sex)` starts with with the join and includes the value checked
+- `(room, sex)` starts with the join and includes the value checked
   by the mixed-sex report.
 
 PostgreSQL may still prefer sequential scans when a report needs most student rows. 

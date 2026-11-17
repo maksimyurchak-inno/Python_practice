@@ -1,17 +1,14 @@
-# loader.py: Reads the JSON files, validates their structure, parses student birthdays and loads the data into the database.
+import json  
+from datetime import datetime 
+from pathlib import Path 
+from typing import Any  
 
-import json  # For reading and parsing JSON files.
-from datetime import datetime  # For parsing date strings.
-from pathlib import Path  # For data annotation.
-from typing import Any  # For data annotation.
-
-from psycopg2.extensions import connection as Connection  # For data annotation.
-from psycopg2.extras import execute_values  # For efficiently inserting multiple rows into the database
+from psycopg2.extensions import connection as Connection  
+from psycopg2.extras import execute_values  
 
 
 # Validates JSON data and loads rooms and students into PostgreSQL.
 class DataLoader:
-    # Reads a JSON array and checks that every record has the required fields.
     @staticmethod
     def _read_records(
         file_path: Path, required_fields: set[str]
@@ -35,7 +32,6 @@ class DataLoader:
 
         return data
 
-    # Validates input files, converts birthdays, and inserts both datasets.
     def load(
         self, connection: Connection, rooms_path: Path, students_path: Path
     ) -> None:
@@ -68,10 +64,9 @@ class DataLoader:
 
         with connection:
             with connection.cursor() as cursor:
-                cursor.execute("TRUNCATE TABLE students, rooms")
                 execute_values(
                     cursor,
-                    "INSERT INTO rooms (id, name) VALUES %s",
+                    "INSERT INTO rooms (id, name) VALUES %s ON CONFLICT (id) DO NOTHING",
                     [(room["id"], room["name"]) for room in rooms],
                     page_size=1000,
                 )
@@ -80,6 +75,7 @@ class DataLoader:
                     """
                     INSERT INTO students (id, name, birthday, room, sex)
                     VALUES %s
+                    ON CONFLICT (id) DO NOTHING
                     """,
                     student_rows,
                     page_size=1000,

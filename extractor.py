@@ -1,23 +1,21 @@
-# - extractor.py: Runs SQL queries on the PostgreSQL server and exports the results as JSON or XML.
+import json  
+import xml.etree.ElementTree as ET  
+from abc import ABC, abstractmethod
+from collections.abc import Callable
+from datetime import date, datetime, time, timedelta  
+from decimal import Decimal  
+from pathlib import Path  
+from typing import Any  
 
-import json  # Provides functions for converting results to JSON text.
-import xml.etree.ElementTree as ET  # Provides functions for converting results to XML documents.
-from datetime import date, datetime, time, timedelta  # Provides date and time types for checking query results.
-from decimal import Decimal  # Imports the type used for checking query results.
-from pathlib import Path  # Provides the filesystem path type used in annotations.
-from typing import Any  # Provides a flexible type used in annotations.
-
-from psycopg2.extensions import connection as Connection  # For data annotation.
-from psycopg2.extras import RealDictCursor  # Makes query rows behave like dictionaries for easy access.
+from psycopg2.extensions import connection as Connection  
+from psycopg2.extras import RealDictCursor  
 
 
 # Runs report queries from a directory and returns their results.
 class SQLQueryRunner:
-    # Stores the directory containing the SQL report files.
     def __init__(self, query_directory: Path) -> None:
         self.query_directory = query_directory
 
-    # Executes every SQL file and maps each filename to its result rows.
     def execute_all(
         self, connection: Connection
     ) -> dict[str, list[dict[str, Any]]]:
@@ -34,24 +32,25 @@ class SQLQueryRunner:
         return results
 
 
-# Writes query results to a JSON or XML report file.
-class ReportExporter:
-    # Converts the results in the requested format and writes them to disk.
+class BaseExporter(ABC):
     def export(
-        self, results: dict[str, list[dict[str, Any]]], output_path: Path, output_format: str
+        self, results: dict[str, list[dict[str, Any]]], output_path: Path
     ) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        if output_format == "json":
-            content = json.dumps(
-                results, indent=2, ensure_ascii=False, default=self._serialize
-            ) + "\n"
-        elif output_format == "xml":
-            content = self._to_xml(results)
-        else:
-            raise ValueError(f"Unsupported output format: {output_format}")
+        content = self.serialize(results)
         output_path.write_text(content, encoding="utf-8")
 
-    # Converts database value types that JSON cannot convert by default.
+    @abstractmethod
+    def serialize(self, results: dict[str, list[dict[str, Any]]]) -> str:
+        raise NotImplementedError
+
+
+class JsonExporter(BaseExporter):
+    def serialize(self, results: dict[str, list[dict[str, Any]]]) -> str:
+        return json.dumps(
+            results, indent=2, ensure_ascii=False, default=self._serialize
+        ) + "\n"
+
     @staticmethod
     def _serialize(value: Any) -> str | float:
         if isinstance(value, Decimal):
@@ -60,9 +59,9 @@ class ReportExporter:
             return str(value)
         raise TypeError(f"Cannot convert {type(value).__name__} to JSON")
 
-    # Builds an XML document from the report names, rows, and fields.
-    @staticmethod
-    def _to_xml(results: dict[str, list[dict[str, Any]]]) -> str:
+
+class XmlExporter(BaseExporter):
+    def serialize(self, results: dict[str, list[dict[str, Any]]]) -> str:
         root = ET.Element("reports")
         for report_name, rows in results.items():
             report = ET.SubElement(root, "report", name=report_name)
@@ -73,3 +72,31 @@ class ReportExporter:
                     element.text = "" if value is None else str(value)
         ET.indent(root, space="  ")
         return ET.tostring(root, encoding="unicode", xml_declaration=True) + "\n"
+
+
+class ExporterFactory:
+    _exporters: dict[str, type[BaseExporter]] = {
+        "json": JsonExporter,
+        "xml": XmlExporter,
+    }
+
+    @classmethod
+    def create(cls, output_format: str) -> BaseExporter:
+        try:
+            exporter_class = cls._exporters[output_format]
+        except KeyError:
+            raise ValueError(f"Unsupported output format: {output_format}") from None
+        return exporter_class()
+
+
+class ReportExporter:
+    def __init__(
+        self,
+        exporter_factory: Callable[[str], BaseExporter] = ExporterFactory.create,
+    ) -> None:
+        self._exporter_factory = exporter_factory
+
+    def export(
+        self, results: dict[str, list[dict[str, Any]]], output_path: Path, output_format: str
+    ) -> None:
+        self._exporter_factory(output_format).export(results, output_path)

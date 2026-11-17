@@ -1,14 +1,13 @@
-# main.py: Entry point for the project; it validates the input paths, initializes the database, loads the data, runs the SQL reports, and exports the results.
+import argparse 
+import logging  
+from pathlib import Path  
 
-import argparse  # Provides command-line argument parsing.
-import logging  # Provides application logging.
-from pathlib import Path  # Provides cross-platform filesystem paths.
+import psycopg2 
 
-import psycopg2  # Provides PostgreSQL exception types.
-
-from database import DatabaseManager  # Manages the PostgreSQL connection and schema setup.
-from extractor import ReportExporter, SQLQueryRunner  # Runs reports and writes their output files.
-from loader import DataLoader  # Validates input JSON files and loads their records.
+from database import DatabaseManager  
+from db_config import DATABASE_CONFIG
+from extractor import ReportExporter, SQLQueryRunner
+from loader import DataLoader 
 
 
 PROJECT_DIRECTORY = Path(__file__).resolve().parent
@@ -33,7 +32,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-# Runs the full input, database, report, and export workflow.
 def main() -> int:
     args = build_parser().parse_args()
     output_path = args.output or PROJECT_DIRECTORY / f"query_results.{args.format}"
@@ -45,7 +43,7 @@ def main() -> int:
                     f"The {label} input path is not a file: {file_path}"
                 )
 
-        with DatabaseManager() as database:
+        with DatabaseManager(DATABASE_CONFIG) as database:
             database.initialize(SCHEMA_FILE, INDEXES_FILE)
             DataLoader().load(database.connection, args.rooms, args.students)
             with database.connection.cursor() as cursor:
