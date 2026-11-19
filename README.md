@@ -1,31 +1,58 @@
-# Python_practice repository
+## Architecture
 
-This project automates the process of setting up a PostgreSQL database, loading dataset files (`rooms.json` and `students.json`), and executing analytical SQL queries to generate a JSON report.
+- `main.py` is the CLI entry point and coordinates the pipeline.
+- `loader.py` validates input records and uses `execute_values` for batched
+  inserts in a transaction.
+- `database.py` manages the PostgreSQL connection and applies `schema.sql` and
+  `indexes.sql`.
+- `sql_queries/` contains the report queries.
+- `extractor.py` Generates the final report.
 
-## Prerequisites
 
-1. **Python 3**: Ensure Python 3 is installed.
-2. **PostgreSQL**: A local PostgreSQL server must be running.
-3. **psycopg2**: Install the required PostgreSQL driver for Python:
+## Setup
 
-*Note: You need to update the database connection parameters (user, password, host, port) inside `json_db.py` to match your local PostgreSQL setup.*
+Python 3.10 or later and a running PostgreSQL server are required.
 
-## Pipeline Overview
-
-The execution script runs the following Python modules in strict sequence:
-1. **`json_db.py`**: Initializes the database by creating the necessary tables (`rooms`, `students`) and performance indexes.
-2. **`loader.py`**: Reads the local JSON data files and inserts the records into the PostgreSQL database.
-3. **`extractor.py`**: Reads SQL query files, executes them on the database side, and saves the analytical output.
-
-## How to Run
-
-You can execute the entire pipeline using the provided Bash script. 
-
-**Using the bash command**
-```bash
-bash script_db.sh
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 ```
 
-## Output
+Create a `.env` file in the project root and set your PostgreSQL connection
+values there. The `.env` file is ignored by Git and must not be committed.
 
-Upon successful execution, the pipeline will generate a `query_results.json` file in the project directory containing the extracted SQL analytics. The script is configured to safely pause upon completion or abort if any errors are encountered.
+```text
+PGDATABASE=postgres
+PGUSER=admin
+PGPASSWORD=your-postgresql-password
+PGHOST=localhost
+PGPORT=5432
+```
+
+The database must already exist.
+
+
+## Indexes
+
+`indexes.sql` creates the following indexes:
+
+- `(room, birthday)` starts with the join key and includes the date used by
+  the age reports.
+- `(room, sex)` starts with the join and includes the value checked
+  by the mixed-sex report.
+
+PostgreSQL may still prefer sequential scans when a report needs most student rows. 
+An index is often more useful when a query needs only a small subset.
+
+## Run
+
+```powershell
+python main.py
+```
+
+To export the reports as XML instead of JSON, run:
+
+```powershell
+python main.py --format xml
+```
